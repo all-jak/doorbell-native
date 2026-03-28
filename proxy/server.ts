@@ -1,0 +1,614 @@
+import cors from 'cors';
+import dotenv from 'dotenv';
+import express from 'express';
+import { execFile } from 'node:child_process';
+import path from 'node:path';
+import { promisify } from 'node:util';
+
+import { appConfig, featuredCategorySlugs, homeSections } from './home-config';
+
+dotenv.config({ path: path.resolve(process.cwd(), 'proxy/.env') });
+dotenv.config();
+
+const app = express();
+const port = Number(process.env.PORT || 4000);
+const wooBaseUrl = process.env.DOORBELL_WOO_BASE_URL?.replace(/\/$/, '');
+const wooConsumerKey = process.env.DOORBELL_WOO_CONSUMER_KEY;
+const wooConsumerSecret = process.env.DOORBELL_WOO_CONSUMER_SECRET;
+
+if (!wooBaseUrl || !wooConsumerKey || !wooConsumerSecret) {
+  throw new Error(
+    'Missing WooCommerce credentials. Configure DOORBELL_WOO_BASE_URL, DOORBELL_WOO_CONSUMER_KEY, and DOORBELL_WOO_CONSUMER_SECRET.'
+  );
+}
+
+app.use(cors());
+app.use(express.json({ limit: '1mb' }));
+
+type WooCategory = {
+  id: number;
+  name: string;
+  slug: string;
+  count: number;
+  parent: number;
+  description?: string;
+  image?: { src?: string | null } | false | null;
+};
+
+type WooProduct = {
+  id: number;
+  slug: string;
+  name: string;
+  type: 'simple' | 'variable';
+  price: string;
+  regular_price: string;
+  sale_price: string;
+  short_description: string;
+  description: string;
+  stock_status: 'instock' | 'outofstock' | 'onbackorder';
+  stock_quantity?: number | null;
+  images?: Array<{ src?: string | null }>;
+  categories: Array<{ id: number; name: string; slug: string }>;
+  weight?: string;
+};
+
+type WooVariation = {
+  id: number;
+  price: string;
+  regular_price: string;
+  sale_price: string;
+  stock_status: 'instock' | 'outofstock' | 'onbackorder';
+  attributes: Array<{
+    name: string;
+    option: string;
+  }>;
+};
+
+type CachedCategories = {
+  expiresAt: number;
+  items: WooCategory[];
+};
+
+let categoriesCache: CachedCategories | null = null;
+
+const CURRENCY = 'BDT';
+const CATEGORY_CACHE_TTL_MS = 5 * 60 * 1000;
+const execFileAsync = promisify(execFile);
+
+type WooHttpResponse = {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+};
+
+const toNumber = (value?: string | null) => {
+  const parsed = value ? Number(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const parseJsonSafely = (value: string) => {
+  try {
+    return JSON.parse(value) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+};
+
+const buildWooUrl = (resourcePath: string, params: Record<string, string | number | boolean | undefined> = {}) => {
+  const url = new URL(`/wp-json/wc/v3${resourcePath}`, wooBaseUrl);
+
+  url.searchParams.set('consumer_key', wooConsumerKey);
+  url.searchParams.set('consumer_secret', wooConsumerSecret);
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') {
+      return;
+    }
+
+    url.searchParams.set(key, String(value));
+  });
+
+  return url.toString();
+};
+
+const normalizeHeaderRecord = (headers: Record<string, unknown> = {}) =>
+  Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [key.toLowerCase(), Array.isArray(value) ? String(value[0]) : String(value)])
+  );
+
+async function requestViaFetch(
+  url: string,
+  init?: RequestInit
+): Promise<WooHttpResponse> {
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    ...init,
+  });
+
+  return {
+    status: response.status,
+    headers: Object.fromEntries(response.headers.entries()),
+    body: await response.text(),
+  };
+}
+
+async function requestViaPowerShell(
+  url: string,
+  init?: RequestInit
+): Promise<WooHttpResponse> {
+  const script = `
+$ProgressPreference = 'SilentlyContinue'
+$url = $env:DOORBELL_PROXY_REQUEST_URL
+$method = $env:DOORBELL_PROXY_REQUEST_METHOD
+$body = $env:DOORBELL_PROXY_REQUEST_BODY
+$headers = @{ Accept = 'application/json'; 'Content-Type' = 'application/json' }
+try {
+  if ($body) {
+    $response = Invoke-WebRequest -Uri $url -Method $method -Headers $headers -Body $body -TimeoutSec 60
+  }
+  else {
+    $response = Invoke-WebRequest -Uri $url -Method $method -Headers $headers -TimeoutSec 60
+  }
+
+  [pscustomobject]@{
+    StatusCode = [int]$response.StatusCode
+    Headers = $response.Headers
+    Body = $response.Content
+  } | ConvertTo-Json -Depth 20 -Compress
+}
+catch {
+  $statusCode = 500
+  $errorBody = $_.Exception.Message
+
+  if ($_.Exception.Response) {
+    $statusCode = [int]$_.Exception.Response.StatusCode
+    $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+    $errorBody = $reader.ReadToEnd()
+    $reader.Close()
+  }
+
+  [pscustomobject]@{
+    StatusCode = $statusCode
+    Headers = @{}
+    Body = $errorBody
+  } | ConvertTo-Json -Depth 20 -Compress
+}
+`;
+
+  const { stdout } = await execFileAsync(
+    'powershell.exe',
+    ['-NoProfile', '-Command', script],
+    {
+      env: {
+        ...process.env,
+        DOORBELL_PROXY_REQUEST_URL: url,
+        DOORBELL_PROXY_REQUEST_METHOD: init?.method ?? 'GET',
+        DOORBELL_PROXY_REQUEST_BODY: typeof init?.body === 'string' ? init.body : '',
+      },
+      maxBuffer: 1024 * 1024 * 10,
+    }
+  );
+
+  const payload = JSON.parse(stdout.trim()) as {
+    StatusCode: number;
+    Headers?: Record<string, unknown>;
+    Body?: string;
+  };
+
+  return {
+    status: Number(payload.StatusCode ?? 500),
+    headers: normalizeHeaderRecord(payload.Headers),
+    body: payload.Body ?? '',
+  };
+}
+
+async function wooRequest(
+  resourcePath: string,
+  params: Record<string, string | number | boolean | undefined> = {},
+  init?: RequestInit
+) {
+  const url = buildWooUrl(resourcePath, params);
+
+  try {
+    return await requestViaFetch(url, init);
+  } catch (error) {
+    if (process.platform === 'win32') {
+      return requestViaPowerShell(url, init);
+    }
+
+    throw error;
+  }
+}
+
+async function wooJson<T>(
+  resourcePath: string,
+  params: Record<string, string | number | boolean | undefined> = {},
+  init?: RequestInit
+) {
+  const response = await wooRequest(resourcePath, params, init);
+
+  if (response.status < 200 || response.status >= 300) {
+    const payload = parseJsonSafely(response.body || '{}') as
+      | {
+          message?: string;
+          code?: string;
+        }
+      | null;
+
+    throw new Error(payload?.message || `WooCommerce request failed with ${response.status}.`);
+  }
+
+  return JSON.parse(response.body) as T;
+}
+
+const normalizeCategory = (category: WooCategory) => ({
+  id: category.id,
+  name: category.name,
+  slug: category.slug,
+  count: category.count,
+  parent: category.parent,
+  description: category.description,
+  image:
+    category.image && typeof category.image === 'object' ? (category.image.src ?? null) : null,
+});
+
+const normalizeProductCard = (product: WooProduct) => ({
+  id: product.id,
+  slug: product.slug,
+  name: product.name,
+  type: product.type || 'simple',
+  price:
+    toNumber(product.price) ??
+    toNumber(product.sale_price) ??
+    toNumber(product.regular_price) ??
+    0,
+  regularPrice: toNumber(product.regular_price),
+  salePrice: toNumber(product.sale_price),
+  currency: CURRENCY,
+  image: product.images?.[0]?.src ?? null,
+  categories: product.categories.map((category) => ({
+    id: category.id,
+    name: category.name,
+    slug: category.slug,
+  })),
+  shortDescription: product.short_description ?? '',
+  stockStatus: product.stock_status ?? 'instock',
+  unitLabel: product.weight ? `${product.weight} kg` : null,
+});
+
+const normalizeVariation = (variation: WooVariation) => ({
+  id: variation.id,
+  label:
+    variation.attributes.map((attribute) => attribute.option).filter(Boolean).join(' · ') ||
+    `Variation ${variation.id}`,
+  price:
+    toNumber(variation.price) ??
+    toNumber(variation.sale_price) ??
+    toNumber(variation.regular_price) ??
+    0,
+  regularPrice: toNumber(variation.regular_price),
+  salePrice: toNumber(variation.sale_price),
+  stockStatus: variation.stock_status ?? 'instock',
+  attributes: variation.attributes,
+});
+
+async function getAllCategories() {
+  if (categoriesCache && categoriesCache.expiresAt > Date.now()) {
+    return categoriesCache.items;
+  }
+
+  let page = 1;
+  const items: WooCategory[] = [];
+
+  while (true) {
+    const batch = await wooJson<WooCategory[]>('/products/categories', {
+      per_page: 100,
+      page,
+      hide_empty: true,
+      orderby: 'count',
+      order: 'desc',
+    });
+
+    items.push(...batch);
+
+    if (batch.length < 100) {
+      break;
+    }
+
+    page += 1;
+  }
+
+  categoriesCache = {
+    items,
+    expiresAt: Date.now() + CATEGORY_CACHE_TTL_MS,
+  };
+
+  return items;
+}
+
+async function getCategoryIdFromSlug(slug?: string) {
+  if (!slug) {
+    return undefined;
+  }
+
+  const categories = await getAllCategories();
+  return categories.find((category) => category.slug === slug)?.id;
+}
+
+async function listProducts(query: {
+  page?: number;
+  perPage?: number;
+  search?: string;
+  categorySlug?: string;
+  featured?: boolean;
+  ids?: string;
+}) {
+  const page = Math.max(Number(query.page || 1), 1);
+  const perPage = Math.min(Math.max(Number(query.perPage || 20), 1), 30);
+  const categoryId = await getCategoryIdFromSlug(query.categorySlug);
+
+  const response = await wooRequest('/products', {
+    page,
+    per_page: perPage,
+    status: 'publish',
+    orderby: query.search ? 'date' : 'popularity',
+    search: query.search,
+    category: categoryId,
+    featured: query.featured ? true : undefined,
+    include: query.ids,
+  });
+
+  if (response.status < 200 || response.status >= 300) {
+    const payload = parseJsonSafely(response.body || '{}') as { message?: string } | null;
+    throw new Error(payload?.message || `WooCommerce request failed with ${response.status}.`);
+  }
+
+  const products = JSON.parse(response.body) as WooProduct[];
+  const total = Number(response.headers['x-wp-total'] || products.length);
+
+  return {
+    items: products.map(normalizeProductCard),
+    total,
+    page,
+    hasMore: page * perPage < total,
+  };
+}
+
+const buildGuestEmail = (phone: string) => {
+  const digits = phone.replace(/\D/g, '') || `${Date.now()}`;
+  return `guest-${digits}@doorbellshopbd.com`;
+};
+
+const splitName = (fullName: string) => {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  return {
+    firstName: parts[0] ?? 'DoorBell',
+    lastName: parts.slice(1).join(' ') || 'Guest',
+  };
+};
+
+app.get('/config', (_request, response) => {
+  response.json(appConfig);
+});
+
+app.get('/home', async (_request, response, next) => {
+  try {
+    const categories = (await getAllCategories())
+      .filter((category) => category.parent === 0)
+      .sort((left, right) => right.count - left.count);
+
+    const featuredCategories = featuredCategorySlugs
+      .map((slug) => categories.find((category) => category.slug === slug))
+      .filter(Boolean)
+      .slice(0, 6)
+      .map((category) => normalizeCategory(category!));
+
+    const sections = await Promise.all(
+      homeSections.map(async (section) => {
+        const products = await listProducts({
+          categorySlug: section.categorySlug,
+          perPage: section.perPage,
+        });
+
+        return {
+          id: section.id,
+          title: section.title,
+          subtitle: section.subtitle,
+          ctaLabel: 'See all',
+          categorySlug: section.categorySlug,
+          products: products.items,
+        };
+      })
+    );
+
+    response.json({
+      featuredCategories,
+      sections,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/catalog/categories', async (_request, response, next) => {
+  try {
+    const categories = await getAllCategories();
+    response.json(categories.map(normalizeCategory));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/catalog/products', async (request, response, next) => {
+  try {
+    const products = await listProducts({
+      page: Number(request.query.page || 1),
+      perPage: Number(request.query.perPage || 20),
+      search: String(request.query.search || ''),
+      categorySlug: request.query.categorySlug ? String(request.query.categorySlug) : undefined,
+      featured: request.query.featured === 'true',
+      ids: request.query.ids ? String(request.query.ids) : undefined,
+    });
+
+    response.json(products);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/catalog/products/:slug', async (request, response, next) => {
+  try {
+    const products = await wooJson<WooProduct[]>('/products', {
+      slug: request.params.slug,
+      status: 'publish',
+    });
+
+    const product = products[0];
+
+    if (!product) {
+      response.status(404).json({ error: 'Product not found.' });
+      return;
+    }
+
+    const variations =
+      product.type === 'variable'
+        ? await wooJson<WooVariation[]>(`/products/${product.id}/variations`, {
+            per_page: 50,
+          })
+        : [];
+
+    response.json({
+      ...normalizeProductCard(product),
+      description: product.description ?? '',
+      gallery: product.images?.map((image) => image.src).filter(Boolean) ?? [],
+      stockQuantity: product.stock_quantity ?? null,
+      variations: variations.map(normalizeVariation),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/checkout/place-order', async (request, response, next) => {
+  try {
+    const payload = request.body as {
+      customer?: {
+        fullName?: string;
+        phone?: string;
+        address?: string;
+      };
+      items?: Array<{
+        productId: number;
+        quantity: number;
+        variationId?: number;
+      }>;
+    };
+
+    const customer = payload.customer;
+    const items = payload.items ?? [];
+
+    if (!customer?.fullName?.trim() || !customer.phone?.trim() || !customer.address?.trim()) {
+      response.status(400).json({ error: 'fullName, phone, and address are required.' });
+      return;
+    }
+
+    if (!items.length) {
+      response.status(400).json({ error: 'Cart items are required.' });
+      return;
+    }
+
+    const productIds = Array.from(new Set(items.map((item) => item.productId)));
+    const productLookupResponse = await listProducts({
+      perPage: productIds.length,
+      ids: productIds.join(','),
+    });
+
+    const productIdsAvailable = new Set(productLookupResponse.items.map((item) => item.id));
+
+    for (const item of items) {
+      if (!productIdsAvailable.has(item.productId)) {
+        response.status(409).json({ error: `Product ${item.productId} is no longer available.` });
+        return;
+      }
+
+      const matchingProduct = productLookupResponse.items.find(
+        (product) => product.id === item.productId
+      );
+
+      if (matchingProduct?.stockStatus === 'outofstock') {
+        response.status(409).json({ error: `${matchingProduct.name} is out of stock.` });
+        return;
+      }
+    }
+
+    const name = splitName(customer.fullName);
+    const guestProfile = {
+      first_name: name.firstName,
+      last_name: name.lastName,
+      address_1: customer.address.trim(),
+      country: appConfig.defaultCountry,
+      phone: customer.phone.trim(),
+      email: buildGuestEmail(customer.phone),
+    };
+
+    const order = await wooJson<{
+      id: number;
+      number: string;
+      status: string;
+      total: string;
+    }>('/orders', {}, {
+      method: 'POST',
+      body: JSON.stringify({
+        payment_method: 'cod',
+        payment_method_title: 'Cash on Delivery',
+        set_paid: false,
+        billing: guestProfile,
+        shipping: guestProfile,
+        shipping_lines: [
+          {
+            method_id: appConfig.delivery.id,
+            method_title: appConfig.delivery.label,
+            total: '0',
+          },
+        ],
+        line_items: items.map((item) => ({
+          product_id: item.productId,
+          variation_id: item.variationId,
+          quantity: item.quantity,
+        })),
+      }),
+    });
+
+    response.status(201).json({
+      orderId: order.id,
+      orderNumber: String(order.number || order.id),
+      status: order.status,
+      total: toNumber(order.total) ?? 0,
+      currency: appConfig.currency,
+      paymentMethod: 'cod',
+      deliveryLabel: appConfig.delivery.label,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.use(
+  (
+    error: Error,
+    _request: express.Request,
+    response: express.Response,
+    _next: express.NextFunction
+  ) => {
+    response.status(500).json({
+      error: error.message || 'DoorBell proxy request failed.',
+    });
+  }
+);
+
+app.listen(port, () => {
+  console.log(`DoorBell proxy running on http://localhost:${port}`);
+});
