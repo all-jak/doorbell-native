@@ -16,23 +16,46 @@ export function useResource<T>({ key, enabled = true, initialData, request }: Us
   requestRef.current = request;
 
   const runRequest = useCallback(async () => {
+    console.log('[DoorBell resource] Loading resource', {
+      key,
+      enabled,
+    });
+
     setLoading(true);
     setError(null);
 
     try {
       const nextData = await requestRef.current();
+      console.log('[DoorBell resource] Resource loaded', {
+        key,
+      });
       setData(nextData);
     } catch (resourceError) {
+      console.error('[DoorBell resource] Resource failed', {
+        key,
+        error:
+          resourceError instanceof Error
+            ? {
+                name: resourceError.name,
+                message: resourceError.message,
+                stack: resourceError.stack,
+              }
+            : resourceError,
+      });
+
       setError(
         resourceError instanceof Error ? resourceError.message : 'DoorBell could not load this section.'
       );
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [enabled, key]);
 
   useEffect(() => {
     if (!enabled) {
+      console.log('[DoorBell resource] Resource skipped because it is disabled', {
+        key,
+      });
       setLoading(false);
       return;
     }

@@ -1,17 +1,13 @@
 import cors from 'cors';
 import dotenv from 'dotenv';
 import express from 'express';
-import { execFile } from 'node:child_process';
-import path from 'node:path';
-import { promisify } from 'node:util';
 
 import { appConfig, featuredCategorySlugs, homeSections } from './home-config';
 
-dotenv.config({ path: path.resolve(process.cwd(), 'proxy/.env') });
+dotenv.config({ path: '.env.local' });
 dotenv.config();
 
 const app = express();
-const port = Number(process.env.PORT || 4000);
 const wooBaseUrl = process.env.DOORBELL_WOO_BASE_URL?.replace(/\/$/, '');
 const wooConsumerKey = process.env.DOORBELL_WOO_CONSUMER_KEY;
 const wooConsumerSecret = process.env.DOORBELL_WOO_CONSUMER_SECRET;
@@ -21,17 +17,6 @@ if (!wooBaseUrl || !wooConsumerKey || !wooConsumerSecret) {
     'Missing WooCommerce credentials. Configure DOORBELL_WOO_BASE_URL, DOORBELL_WOO_CONSUMER_KEY, and DOORBELL_WOO_CONSUMER_SECRET.'
   );
 }
-
-app.use(cors());
-app.use(express.json({ limit: '1mb' }));
-app.use((request, _response, next) => {
-  console.log('[DoorBell proxy] Incoming request', {
-    method: request.method,
-    path: request.path,
-    query: request.query,
-  });
-  next();
-});
 
 type WooCategory = {
   id: number;
@@ -77,19 +62,27 @@ type CachedCategories = {
   items: WooCategory[];
 };
 
-let categoriesCache: CachedCategories | null = null;
-
-const CURRENCY = 'BDT';
-const CATEGORY_CACHE_TTL_MS = 5 * 60 * 1000;
-const WOO_REQUEST_TIMEOUT_MS = 15000;
-const WOO_REQUEST_TIMEOUT_SECONDS = Math.ceil(WOO_REQUEST_TIMEOUT_MS / 1000);
-const execFileAsync = promisify(execFile);
-
 type WooHttpResponse = {
   status: number;
   headers: Record<string, string>;
   body: string;
 };
+
+const CURRENCY = 'BDT';
+const CATEGORY_CACHE_TTL_MS = 5 * 60 * 1000;
+const WOO_REQUEST_TIMEOUT_MS = 15000;
+let categoriesCache: CachedCategories | null = null;
+
+app.use(cors());
+app.use(express.json({ limit: '1mb' }));
+app.use((request, _response, next) => {
+  console.log('[DoorBell Vercel proxy] Incoming request', {
+    method: request.method,
+    path: request.path,
+    query: request.query,
+  });
+  next();
+});
 
 const toNumber = (value?: string | null) => {
   const parsed = value ? Number(value) : NaN;
@@ -110,6 +103,14 @@ const serializeError = (error: unknown) => {
       name: error.name,
       message: error.message,
       stack: error.stack,
+      cause:
+        error.cause && typeof error.cause === 'object'
+          ? {
+              name: 'name' in error.cause ? String(error.cause.name) : undefined,
+              code: 'code' in error.cause ? String(error.cause.code) : undefined,
+              message: 'message' in error.cause ? String(error.cause.message) : undefined,
+            }
+          : undefined,
     };
   }
 
@@ -117,6 +118,9 @@ const serializeError = (error: unknown) => {
     value: error,
   };
 };
+
+const truncateForLog = (value: string, maxLength = 320) =>
+  value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`;
 
 const redactWooUrl = (value: string) => {
   try {
@@ -134,10 +138,10 @@ const redactWooUrl = (value: string) => {
   }
 };
 
-const truncateForLog = (value: string, maxLength = 320) =>
-  value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`;
-
-const buildWooUrl = (resourcePath: string, params: Record<string, string | number | boolean | undefined> = {}) => {
+const buildWooUrl = (
+  resourcePath: string,
+  params: Record<string, string | number | boolean | undefined> = {}
+) => {
   const url = new URL(`/wp-json/wc/v3${resourcePath}`, wooBaseUrl);
 
   url.searchParams.set('consumer_key', wooConsumerKey);
@@ -154,15 +158,9 @@ const buildWooUrl = (resourcePath: string, params: Record<string, string | numbe
   return url.toString();
 };
 
-const normalizeHeaderRecord = (headers: Record<string, unknown> = {}) =>
-  Object.fromEntries(
-    Object.entries(headers).map(([key, value]) => [key.toLowerCase(), Array.isArray(value) ? String(value[0]) : String(value)])
-  );
+const buildWpJsonUrl = () => new URL('/wp-json/', wooBaseUrl).toString();
 
-async function requestViaFetch(
-  url: string,
-  init?: RequestInit
-): Promise<WooHttpResponse> {
+async function requestViaFetch(url: string, init?: RequestInit): Promise<WooHttpResponse> {
   const timeoutController = new AbortController();
   const timeoutId = setTimeout(() => timeoutController.abort(), WOO_REQUEST_TIMEOUT_MS);
 
@@ -173,6 +171,7 @@ async function requestViaFetch(
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
+        ...(init?.headers ?? {}),
       },
     });
 
@@ -186,76 +185,6 @@ async function requestViaFetch(
   }
 }
 
-async function requestViaPowerShell(
-  url: string,
-  init?: RequestInit
-): Promise<WooHttpResponse> {
-  const script = `
-$ProgressPreference = 'SilentlyContinue'
-$url = $env:DOORBELL_PROXY_REQUEST_URL
-$method = $env:DOORBELL_PROXY_REQUEST_METHOD
-$body = $env:DOORBELL_PROXY_REQUEST_BODY
-$headers = @{ Accept = 'application/json'; 'Content-Type' = 'application/json' }
-try {
-  if ($body) {
-    $response = Invoke-WebRequest -Uri $url -Method $method -Headers $headers -Body $body -TimeoutSec ${WOO_REQUEST_TIMEOUT_SECONDS}
-  }
-  else {
-    $response = Invoke-WebRequest -Uri $url -Method $method -Headers $headers -TimeoutSec ${WOO_REQUEST_TIMEOUT_SECONDS}
-  }
-
-  [pscustomobject]@{
-    StatusCode = [int]$response.StatusCode
-    Headers = $response.Headers
-    Body = $response.Content
-  } | ConvertTo-Json -Depth 20 -Compress
-}
-catch {
-  $statusCode = 500
-  $errorBody = $_.Exception.Message
-
-  if ($_.Exception.Response) {
-    $statusCode = [int]$_.Exception.Response.StatusCode
-    $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
-    $errorBody = $reader.ReadToEnd()
-    $reader.Close()
-  }
-
-  [pscustomobject]@{
-    StatusCode = $statusCode
-    Headers = @{}
-    Body = $errorBody
-  } | ConvertTo-Json -Depth 20 -Compress
-}
-`;
-
-  const { stdout } = await execFileAsync(
-    'powershell.exe',
-    ['-NoProfile', '-Command', script],
-    {
-      env: {
-        ...process.env,
-        DOORBELL_PROXY_REQUEST_URL: url,
-        DOORBELL_PROXY_REQUEST_METHOD: init?.method ?? 'GET',
-        DOORBELL_PROXY_REQUEST_BODY: typeof init?.body === 'string' ? init.body : '',
-      },
-      maxBuffer: 1024 * 1024 * 10,
-    }
-  );
-
-  const payload = JSON.parse(stdout.trim()) as {
-    StatusCode: number;
-    Headers?: Record<string, unknown>;
-    Body?: string;
-  };
-
-  return {
-    status: Number(payload.StatusCode ?? 500),
-    headers: normalizeHeaderRecord(payload.Headers),
-    body: payload.Body ?? '',
-  };
-}
-
 async function wooRequest(
   resourcePath: string,
   params: Record<string, string | number | boolean | undefined> = {},
@@ -265,7 +194,7 @@ async function wooRequest(
   const method = init?.method ?? 'GET';
   const safeUrl = redactWooUrl(url);
 
-  console.log('[DoorBell proxy] Woo request started', {
+  console.log('[DoorBell Vercel proxy] Woo request started', {
     method,
     resourcePath,
     url: safeUrl,
@@ -274,7 +203,7 @@ async function wooRequest(
   try {
     const response = await requestViaFetch(url, init);
 
-    console.log('[DoorBell proxy] Woo request completed', {
+    console.log('[DoorBell Vercel proxy] Woo request completed', {
       method,
       resourcePath,
       url: safeUrl,
@@ -283,25 +212,15 @@ async function wooRequest(
 
     return response;
   } catch (error) {
-    console.error('[DoorBell proxy] Woo fetch transport failed', {
+    console.error('[DoorBell Vercel proxy] Woo transport failed', {
       method,
       resourcePath,
       url: safeUrl,
-      fallback: process.platform === 'win32' ? 'powershell' : 'none',
       error: serializeError(error),
     });
 
-    if (process.platform === 'win32') {
-      const response = await requestViaPowerShell(url, init);
-
-      console.log('[DoorBell proxy] Woo request completed via PowerShell', {
-        method,
-        resourcePath,
-        url: safeUrl,
-        status: response.status,
-      });
-
-      return response;
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('WooCommerce request timed out.');
     }
 
     throw error;
@@ -323,7 +242,7 @@ async function wooJson<T>(
         }
       | null;
 
-    console.error('[DoorBell proxy] Woo JSON request returned an error response', {
+    console.error('[DoorBell Vercel proxy] Woo JSON request returned an error response', {
       resourcePath,
       status: response.status,
       body: truncateForLog(response.body),
@@ -455,7 +374,7 @@ async function listProducts(query: {
   if (response.status < 200 || response.status >= 300) {
     const payload = parseJsonSafely(response.body || '{}') as { message?: string } | null;
 
-    console.error('[DoorBell proxy] Woo products request returned an error response', {
+    console.error('[DoorBell Vercel proxy] Woo products request returned an error response', {
       categorySlug: query.categorySlug,
       search: query.search,
       status: response.status,
@@ -488,6 +407,71 @@ const splitName = (fullName: string) => {
     lastName: parts.slice(1).join(' ') || 'Guest',
   };
 };
+
+app.get('/', (_request, response) => {
+  response.json({
+    name: 'DoorBell Vercel proxy',
+    routes: [
+      '/health',
+      '/health/woo',
+      '/config',
+      '/home',
+      '/catalog/categories',
+      '/catalog/products',
+      '/catalog/products/:slug',
+      '/checkout/place-order',
+    ],
+  });
+});
+
+app.get('/health', (_request, response) => {
+  response.json({
+    ok: true,
+    wooBaseUrl,
+    env: {
+      hasWooBaseUrl: Boolean(wooBaseUrl),
+      hasWooConsumerKey: Boolean(wooConsumerKey),
+      hasWooConsumerSecret: Boolean(wooConsumerSecret),
+    },
+  });
+});
+
+app.get('/health/woo', async (_request, response) => {
+  const wpJsonUrl = buildWpJsonUrl();
+
+  try {
+    const wpJsonResponse = await requestViaFetch(wpJsonUrl);
+    const categoriesResponse = await wooRequest('/products/categories', {
+      per_page: 1,
+    });
+
+    response.json({
+      ok:
+        wpJsonResponse.status >= 200 &&
+        wpJsonResponse.status < 300 &&
+        categoriesResponse.status >= 200 &&
+        categoriesResponse.status < 300,
+      wpJson: {
+        url: wpJsonUrl,
+        status: wpJsonResponse.status,
+        bodyPreview: truncateForLog(wpJsonResponse.body),
+      },
+      categories: {
+        url: redactWooUrl(buildWooUrl('/products/categories', { per_page: 1 })),
+        status: categoriesResponse.status,
+        bodyPreview: truncateForLog(categoriesResponse.body),
+      },
+    });
+  } catch (error) {
+    response.status(502).json({
+      ok: false,
+      wpJson: {
+        url: wpJsonUrl,
+      },
+      error: serializeError(error),
+    });
+  }
+});
 
 app.get('/config', (_request, response) => {
   response.json(appConfig);
@@ -702,7 +686,7 @@ app.use(
     response: express.Response,
     _next: express.NextFunction
   ) => {
-    console.error('[DoorBell proxy] Route failed', {
+    console.error('[DoorBell Vercel proxy] Route failed', {
       method: request.method,
       path: request.path,
       query: request.query,
@@ -710,11 +694,9 @@ app.use(
     });
 
     response.status(500).json({
-      error: error.message || 'DoorBell proxy request failed.',
+      error: error.message || 'DoorBell Vercel proxy request failed.',
     });
   }
 );
 
-app.listen(port, () => {
-  console.log(`DoorBell proxy running on http://localhost:${port}`);
-});
+export default app;
