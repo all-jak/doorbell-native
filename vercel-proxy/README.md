@@ -31,7 +31,7 @@ Use `.env.example` as the template.
 4. Add the three WooCommerce environment variables above.
 5. Deploy.
 
-This folder uses an explicit Vercel function entrypoint at `api/index.ts` plus a rewrite in `vercel.json`, so every request is handled by the Express app in `app.ts`.
+This folder uses Vercel's documented zero-config Express setup with `app.ts` at the project root.
 
 ## Test after deploy
 
