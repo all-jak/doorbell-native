@@ -8,6 +8,7 @@ dotenv.config({ path: '.env.local' });
 dotenv.config();
 
 const app = express();
+app.set('trust proxy', true);
 const wooBaseUrl = process.env.DOORBELL_WOO_BASE_URL?.replace(/\/$/, '');
 const wooConsumerKey = process.env.DOORBELL_WOO_CONSUMER_KEY;
 const wooConsumerSecret = process.env.DOORBELL_WOO_CONSUMER_SECRET;
@@ -65,6 +66,7 @@ type WooHttpResponse = {
 const CURRENCY = 'BDT';
 const CATEGORY_CACHE_TTL_MS = 5 * 60 * 1000;
 const WOO_REQUEST_TIMEOUT_MS = 15000;
+const REMOTE_ASSET_TIMEOUT_MS = 20000;
 let categoriesCache: CachedCategories | null = null;
 
 app.use(cors());
@@ -115,6 +117,47 @@ const serializeError = (error: unknown) => {
 
 const truncateForLog = (value: string, maxLength = 320) =>
   value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`;
+
+const getPublicBaseUrl = (request: express.Request) =>
+  `${request.protocol}://${request.get('host')}`;
+
+const canonicalizeHostname = (value: string) => value.trim().toLowerCase().replace(/^www\./, '');
+
+const normalizeWooAssetUrl = (value?: string | null) => {
+  if (!value?.trim()) {
+    return null;
+  }
+
+  try {
+    return new URL(value, getWooConfig().wooBaseUrl).toString();
+  } catch {
+    return null;
+  }
+};
+
+const isAllowedWooAssetUrl = (url: URL) => {
+  const storeHostname = canonicalizeHostname(new URL(getWooConfig().wooBaseUrl).hostname);
+  const assetHostname = canonicalizeHostname(url.hostname);
+
+  return (
+    (url.protocol === 'https:' || url.protocol === 'http:') &&
+    (assetHostname === storeHostname || assetHostname.endsWith(`.${storeHostname}`))
+  );
+};
+
+const toPublicAssetUrl = (value: string | null | undefined, publicBaseUrl?: string) => {
+  const remoteUrl = normalizeWooAssetUrl(value);
+
+  if (!remoteUrl) {
+    return null;
+  }
+
+  return publicBaseUrl
+    ? `${publicBaseUrl}/media?url=${encodeURIComponent(remoteUrl)}`
+    : remoteUrl;
+};
+
+const isPresent = (value: string | null): value is string => Boolean(value);
 
 const getWooConfig = () => {
   if (!wooBaseUrl || !wooConsumerKey || !wooConsumerSecret) {
@@ -168,6 +211,26 @@ const buildWooUrl = (
 };
 
 const buildWpJsonUrl = () => new URL('/wp-json/', getWooConfig().wooBaseUrl).toString();
+
+async function fetchRemoteAsset(url: string, acceptHeader?: string | null) {
+  const timeoutController = new AbortController();
+  const timeoutId = setTimeout(() => timeoutController.abort(), REMOTE_ASSET_TIMEOUT_MS);
+  const storeOrigin = new URL(getWooConfig().wooBaseUrl).origin;
+
+  try {
+    return await fetch(url, {
+      signal: timeoutController.signal,
+      headers: {
+        Accept: acceptHeader?.trim() || 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+        Origin: storeOrigin,
+        Referer: storeOrigin,
+        'User-Agent': 'DoorBellProxy/1.0',
+      },
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 async function requestViaFetch(url: string, init?: RequestInit): Promise<WooHttpResponse> {
   const timeoutController = new AbortController();
@@ -263,18 +326,20 @@ async function wooJson<T>(
   return JSON.parse(response.body) as T;
 }
 
-const normalizeCategory = (category: WooCategory) => ({
+const normalizeCategory = (category: WooCategory, publicBaseUrl?: string) => ({
   id: category.id,
   name: category.name,
   slug: category.slug,
   count: category.count,
   parent: category.parent,
   description: category.description,
-  image:
+  image: toPublicAssetUrl(
     category.image && typeof category.image === 'object' ? (category.image.src ?? null) : null,
+    publicBaseUrl
+  ),
 });
 
-const normalizeProductCard = (product: WooProduct) => ({
+const normalizeProductCard = (product: WooProduct, publicBaseUrl?: string) => ({
   id: product.id,
   slug: product.slug,
   name: product.name,
@@ -287,7 +352,7 @@ const normalizeProductCard = (product: WooProduct) => ({
   regularPrice: toNumber(product.regular_price),
   salePrice: toNumber(product.sale_price),
   currency: CURRENCY,
-  image: product.images?.[0]?.src ?? null,
+  image: toPublicAssetUrl(product.images?.[0]?.src ?? null, publicBaseUrl),
   categories: product.categories.map((category) => ({
     id: category.id,
     name: category.name,
@@ -364,7 +429,7 @@ async function listProducts(query: {
   categorySlug?: string;
   featured?: boolean;
   ids?: string;
-}) {
+}, publicBaseUrl?: string) {
   const page = Math.max(Number(query.page || 1), 1);
   const perPage = Math.min(Math.max(Number(query.perPage || 20), 1), 30);
   const categoryId = await getCategoryIdFromSlug(query.categorySlug);
@@ -397,7 +462,7 @@ async function listProducts(query: {
   const total = Number(response.headers['x-wp-total'] || products.length);
 
   return {
-    items: products.map(normalizeProductCard),
+    items: products.map((product) => normalizeProductCard(product, publicBaseUrl)),
     total,
     page,
     hasMore: page * perPage < total,
@@ -425,6 +490,7 @@ app.get('/', (_request, response) => {
       '/health/woo',
       '/config',
       '/home',
+      '/media',
       '/catalog/categories',
       '/catalog/products',
       '/catalog/products/:slug',
@@ -486,8 +552,89 @@ app.get('/config', (_request, response) => {
   response.json(appConfig);
 });
 
+app.get('/media', async (request, response) => {
+  const rawUrl = typeof request.query.url === 'string' ? request.query.url : '';
+  const remoteUrl = normalizeWooAssetUrl(rawUrl);
+
+  if (!remoteUrl) {
+    response.status(400).json({ error: 'A valid Woo media URL is required.' });
+    return;
+  }
+
+  const parsedUrl = new URL(remoteUrl);
+
+  if (!isAllowedWooAssetUrl(parsedUrl)) {
+    response.status(400).json({ error: 'Only media hosted on the WooCommerce domain can be proxied.' });
+    return;
+  }
+
+  try {
+    const assetResponse = await fetchRemoteAsset(parsedUrl.toString(), request.headers.accept);
+
+    if (!assetResponse.ok) {
+      console.error('[DoorBell Vercel proxy] Media proxy returned an error response', {
+        url: parsedUrl.toString(),
+        status: assetResponse.status,
+      });
+
+      response
+        .status(assetResponse.status === 404 ? 404 : 502)
+        .json({ error: `Image request failed with ${assetResponse.status}.` });
+      return;
+    }
+
+    const contentType = assetResponse.headers.get('content-type');
+
+    if (!contentType?.startsWith('image/')) {
+      console.error('[DoorBell Vercel proxy] Media proxy received a non-image response', {
+        url: parsedUrl.toString(),
+        contentType,
+      });
+
+      response.status(502).json({ error: 'Upstream media response was not an image.' });
+      return;
+    }
+
+    const body = Buffer.from(await assetResponse.arrayBuffer());
+    const cacheControl = assetResponse.headers.get('cache-control');
+    const contentLength = assetResponse.headers.get('content-length');
+    const etag = assetResponse.headers.get('etag');
+    const lastModified = assetResponse.headers.get('last-modified');
+
+    response.setHeader('Content-Type', contentType);
+    response.setHeader('Cache-Control', cacheControl ?? 'public, max-age=86400, s-maxage=86400');
+
+    if (contentLength) {
+      response.setHeader('Content-Length', contentLength);
+    }
+
+    if (etag) {
+      response.setHeader('ETag', etag);
+    }
+
+    if (lastModified) {
+      response.setHeader('Last-Modified', lastModified);
+    }
+
+    response.status(200).send(body);
+  } catch (error) {
+    console.error('[DoorBell Vercel proxy] Media proxy transport failed', {
+      url: parsedUrl.toString(),
+      error: serializeError(error),
+    });
+
+    response.status(502).json({
+      error:
+        error instanceof Error && error.name === 'AbortError'
+          ? 'Image request timed out.'
+          : 'Image request failed.',
+    });
+  }
+});
+
 app.get('/home', async (_request, response, next) => {
   try {
+    const publicBaseUrl = getPublicBaseUrl(_request);
     const categories = (await getAllCategories())
       .filter((category) => category.parent === 0)
       .sort((left, right) => right.count - left.count);
@@ -496,14 +643,14 @@ app.get('/home', async (_request, response, next) => {
       .map((slug) => categories.find((category) => category.slug === slug))
       .filter(Boolean)
       .slice(0, 6)
-      .map((category) => normalizeCategory(category!));
+      .map((category) => normalizeCategory(category!, publicBaseUrl));
 
     const sections = await Promise.all(
       homeSections.map(async (section) => {
         const products = await listProducts({
           categorySlug: section.categorySlug,
           perPage: section.perPage,
-        });
+        }, publicBaseUrl);
 
         return {
           id: section.id,
@@ -527,8 +674,9 @@ app.get('/home', async (_request, response, next) => {
 
 app.get('/catalog/categories', async (_request, response, next) => {
   try {
+    const publicBaseUrl = getPublicBaseUrl(_request);
     const categories = await getAllCategories();
-    response.json(categories.map(normalizeCategory));
+    response.json(categories.map((category) => normalizeCategory(category, publicBaseUrl)));
   } catch (error) {
     next(error);
   }
@@ -543,7 +691,7 @@ app.get('/catalog/products', async (request, response, next) => {
       categorySlug: request.query.categorySlug ? String(request.query.categorySlug) : undefined,
       featured: request.query.featured === 'true',
       ids: request.query.ids ? String(request.query.ids) : undefined,
-    });
+    }, getPublicBaseUrl(request));
 
     response.json(products);
   } catch (error) {
@@ -559,6 +707,7 @@ app.get('/catalog/products/:slug', async (request, response, next) => {
     });
 
     const product = products[0];
+    const publicBaseUrl = getPublicBaseUrl(request);
 
     if (!product) {
       response.status(404).json({ error: 'Product not found.' });
@@ -573,9 +722,12 @@ app.get('/catalog/products/:slug', async (request, response, next) => {
         : [];
 
     response.json({
-      ...normalizeProductCard(product),
+      ...normalizeProductCard(product, publicBaseUrl),
       description: product.description ?? '',
-      gallery: product.images?.map((image) => image.src).filter(Boolean) ?? [],
+      gallery:
+        product.images
+          ?.map((image) => toPublicAssetUrl(image.src, publicBaseUrl))
+          .filter(isPresent) ?? [],
       stockQuantity: product.stock_quantity ?? null,
       variations: variations.map(normalizeVariation),
     });

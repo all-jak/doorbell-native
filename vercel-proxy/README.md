@@ -8,6 +8,7 @@ This folder is a standalone WooCommerce proxy/backend for Vercel. Deploy this fo
 - `GET /health/woo`
 - `GET /config`
 - `GET /home`
+- `GET /media`
 - `GET /catalog/categories`
 - `GET /catalog/products`
 - `GET /catalog/products/:slug`
@@ -40,9 +41,12 @@ Replace the domain below with your real Vercel URL.
 - `https://your-project.vercel.app/health`
 - `https://your-project.vercel.app/health/woo`
 - `https://your-project.vercel.app/config`
+- `https://your-project.vercel.app/media?url=https%3A%2F%2Fdoorbellshopbd.com%2Fwp-content%2Fuploads%2Fexample.jpg`
 - `https://your-project.vercel.app/catalog/categories`
 
 Check `/health` first. If that works, check `/health/woo` next. `/health/woo` is the fastest way to confirm that Vercel can actually reach your WooCommerce API.
+
+`/media` is used by the app to proxy WooCommerce-hosted product images through the same Vercel domain, which avoids direct device requests to the store image host.
 
 ## Point the mobile app to Vercel
 
