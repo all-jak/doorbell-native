@@ -35,6 +35,14 @@ const CATEGORY_BANNERS = [
   require('@/assets/images/banners/banner-9.jpg'),
   require('@/assets/images/banners/banner-10.jpg'),
 ] as const;
+const CATEGORY_ICONS = [
+  require('@/assets/images/categories/cat_fruits.png'),
+  require('@/assets/images/categories/cat_dairy.png'),
+  require('@/assets/images/categories/cat_snacks.png'),
+  require('@/assets/images/categories/cat_meat.png'),
+  require('@/assets/images/categories/cat_drinks.png'),
+  require('@/assets/images/categories/cat_cleaning.png'),
+] as const;
 const hasRealProductImage = (product: ProductCardType) =>
   typeof product.image === 'string' && product.image.trim().length > 0;
 const isEnglishCategoryName = (value: string) =>
@@ -43,6 +51,11 @@ const getBannerForCategory = (slug: string) =>
   CATEGORY_BANNERS[
     Array.from(slug).reduce((total, character) => total + character.charCodeAt(0), 17) %
       CATEGORY_BANNERS.length
+  ];
+const getIconForCategory = (slug: string) =>
+  CATEGORY_ICONS[
+    Array.from(slug).reduce((total, character) => total + character.charCodeAt(0), 12) %
+      CATEGORY_ICONS.length
   ];
 
 export default function HomeScreen() {
@@ -282,13 +295,14 @@ export default function HomeScreen() {
   const categories = categoryResource.data ?? [];
   const homeCategories: (
     | { name: string; slug: string; icon: keyof typeof Ionicons.glyphMap; isAll: true }
-    | { name: string; slug: string; banner: (typeof CATEGORY_BANNERS)[number]; isAll: false }
+    | { name: string; slug: string; banner: (typeof CATEGORY_BANNERS)[number]; thumb: (typeof CATEGORY_ICONS)[number]; isAll: false }
   )[] = [
     { name: 'All', slug: 'all', icon: 'basket-outline', isAll: true },
     ...categories.map((category) => ({
       name: category.name.replaceAll('&amp;', '&'),
       slug: category.slug,
       banner: getBannerForCategory(category.slug),
+      thumb: getIconForCategory(category.slug),
       isAll: false as const,
     })),
   ];
@@ -523,14 +537,16 @@ export default function HomeScreen() {
                     </Pressable>
                   </View>
                 </View>
-                <Pressable
-                  onPress={() => {
-                    closeLocationDropdown();
-                    setIsAccountMenuOpen((current) => !current);
-                  }}
-                  style={({ pressed }) => [styles.avatar, pressed && styles.avatarPressed]}>
-                  <Ionicons name="person-outline" size={20} color="#000" />
-                </Pressable>
+                <View style={styles.avatarShadowWrap}>
+                  <Pressable
+                    onPress={() => {
+                      closeLocationDropdown();
+                      setIsAccountMenuOpen((current) => !current);
+                    }}
+                    style={({ pressed }) => [styles.avatar, pressed && styles.avatarPressed]}>
+                    <Ionicons name="person-outline" size={20} color="#000" />
+                  </Pressable>
+                </View>
               </View>
 
               <View style={styles.searchRow}>
@@ -564,7 +580,7 @@ export default function HomeScreen() {
                         }
                       />
                     ) : (
-                      <Image contentFit="cover" source={cat.banner} style={styles.catThumb} />
+                      <Image contentFit="cover" source={cat.thumb} style={styles.catThumb} />
                     )}
                     <Text
                       numberOfLines={2}
@@ -783,19 +799,25 @@ const styles = StyleSheet.create({
     fontFamily: doorbellTheme.fonts.bold,
     color: doorbellTheme.colors.accentStrong,
   },
-  avatar: {
+  avatarShadowWrap: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.6)',
+    backgroundColor: '#FFF',
     shadowColor: '#000',
     shadowOpacity: 0.05,
     shadowRadius: 5,
     shadowOffset: { width: 0, height: 2 },
     elevation: 3,
+    marginTop: 2,
+  },
+  avatar: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.72)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 2,
   },
   avatarPressed: {
     opacity: 0.9,

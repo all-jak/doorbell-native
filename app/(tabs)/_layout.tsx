@@ -1,5 +1,6 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
+import { StyleSheet, View } from 'react-native';
 
 import { doorbellTheme } from '@/constants/theme';
 
@@ -13,6 +14,14 @@ export default function TabsLayout() {
         tabBarInactiveTintColor: doorbellTheme.colors.textMuted,
         tabBarShowLabel: true,
         tabBarHideOnKeyboard: true,
+        tabBarBackground: () => (
+          <View pointerEvents="none" style={styles.tabBarBackgroundWrap}>
+            <View style={styles.tabBarShadow} />
+            <View style={styles.tabBarFrame} />
+            <View style={styles.tabBarBackground} />
+            <View style={styles.tabBarOutline} />
+          </View>
+        ),
         tabBarStyle: {
           position: 'absolute',
           left: 18,
@@ -23,13 +32,11 @@ export default function TabsLayout() {
           paddingBottom: 12,
           paddingTop: 10,
           paddingHorizontal: 10,
-          backgroundColor: doorbellTheme.colors.tabBar,
+          backgroundColor: 'transparent',
           borderTopWidth: 0,
-          shadowColor: '#7A3422',
-          shadowOpacity: 0.18,
-          shadowOffset: { width: 0, height: 8 },
-          shadowRadius: 24,
-          elevation: 12,
+          overflow: 'visible',
+          shadowOpacity: 0,
+          elevation: 0,
         },
         tabBarItemStyle: {
           borderRadius: 24,
@@ -82,3 +89,42 @@ export default function TabsLayout() {
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  tabBarBackgroundWrap: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  tabBarShadow: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 38,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowOffset: { width: 0, height: 0 },
+    shadowRadius: 12,
+    elevation: 7,
+  },
+  tabBarFrame: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 38,
+    backgroundColor: doorbellTheme.colors.accent,
+  },
+  tabBarBackground: {
+    position: 'absolute',
+    top: 1,
+    right: 1,
+    bottom: 1,
+    left: 1,
+    borderRadius: 37,
+    backgroundColor: doorbellTheme.colors.tabBar,
+  },
+  tabBarOutline: {
+    position: 'absolute',
+    top: 1,
+    right: 1,
+    bottom: 1,
+    left: 1,
+    borderRadius: 37,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.45)',
+  },
+});

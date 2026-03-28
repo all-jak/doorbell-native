@@ -1,5 +1,5 @@
 const baseConfig = {
-  name: "doorbell",
+  name: "Doorbell",
   slug: "doorbell",
   version: "1.0.0",
   orientation: "portrait",
