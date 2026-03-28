@@ -123,13 +123,19 @@ const getPublicBaseUrl = (request: express.Request) =>
 
 const canonicalizeHostname = (value: string) => value.trim().toLowerCase().replace(/^www\./, '');
 
-const normalizeWooAssetUrl = (value?: string | null) => {
-  if (!value?.trim()) {
+const normalizeWooAssetUrl = (value: unknown) => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmedValue = value.trim();
+
+  if (!trimmedValue) {
     return null;
   }
 
   try {
-    return new URL(value, getWooConfig().wooBaseUrl).toString();
+    return new URL(trimmedValue, getWooConfig().wooBaseUrl).toString();
   } catch {
     return null;
   }
@@ -145,7 +151,7 @@ const isAllowedWooAssetUrl = (url: URL) => {
   );
 };
 
-const toPublicAssetUrl = (value: string | null | undefined, publicBaseUrl?: string) => {
+const toPublicAssetUrl = (value: unknown, publicBaseUrl?: string) => {
   const remoteUrl = normalizeWooAssetUrl(value);
 
   if (!remoteUrl) {
