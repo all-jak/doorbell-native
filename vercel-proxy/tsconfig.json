@@ -10,5 +10,5 @@
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["./app.ts", "./home-config.ts"]
+  "include": ["./app.ts", "./home-config.ts", "./api/**/*.ts"]
 }

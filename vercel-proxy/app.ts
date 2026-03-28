@@ -12,12 +12,6 @@ const wooBaseUrl = process.env.DOORBELL_WOO_BASE_URL?.replace(/\/$/, '');
 const wooConsumerKey = process.env.DOORBELL_WOO_CONSUMER_KEY;
 const wooConsumerSecret = process.env.DOORBELL_WOO_CONSUMER_SECRET;
 
-if (!wooBaseUrl || !wooConsumerKey || !wooConsumerSecret) {
-  throw new Error(
-    'Missing WooCommerce credentials. Configure DOORBELL_WOO_BASE_URL, DOORBELL_WOO_CONSUMER_KEY, and DOORBELL_WOO_CONSUMER_SECRET.'
-  );
-}
-
 type WooCategory = {
   id: number;
   name: string;
@@ -122,6 +116,20 @@ const serializeError = (error: unknown) => {
 const truncateForLog = (value: string, maxLength = 320) =>
   value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`;
 
+const getWooConfig = () => {
+  if (!wooBaseUrl || !wooConsumerKey || !wooConsumerSecret) {
+    throw new Error(
+      'Missing WooCommerce credentials. Configure DOORBELL_WOO_BASE_URL, DOORBELL_WOO_CONSUMER_KEY, and DOORBELL_WOO_CONSUMER_SECRET.'
+    );
+  }
+
+  return {
+    wooBaseUrl,
+    wooConsumerKey,
+    wooConsumerSecret,
+  };
+};
+
 const redactWooUrl = (value: string) => {
   try {
     const url = new URL(value);
@@ -142,10 +150,11 @@ const buildWooUrl = (
   resourcePath: string,
   params: Record<string, string | number | boolean | undefined> = {}
 ) => {
-  const url = new URL(`/wp-json/wc/v3${resourcePath}`, wooBaseUrl);
+  const config = getWooConfig();
+  const url = new URL(`/wp-json/wc/v3${resourcePath}`, config.wooBaseUrl);
 
-  url.searchParams.set('consumer_key', wooConsumerKey);
-  url.searchParams.set('consumer_secret', wooConsumerSecret);
+  url.searchParams.set('consumer_key', config.wooConsumerKey);
+  url.searchParams.set('consumer_secret', config.wooConsumerSecret);
 
   Object.entries(params).forEach(([key, value]) => {
     if (value === undefined || value === null || value === '') {
@@ -158,7 +167,7 @@ const buildWooUrl = (
   return url.toString();
 };
 
-const buildWpJsonUrl = () => new URL('/wp-json/', wooBaseUrl).toString();
+const buildWpJsonUrl = () => new URL('/wp-json/', getWooConfig().wooBaseUrl).toString();
 
 async function requestViaFetch(url: string, init?: RequestInit): Promise<WooHttpResponse> {
   const timeoutController = new AbortController();

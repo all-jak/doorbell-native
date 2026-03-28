@@ -31,7 +31,7 @@ Use `.env.example` as the template.
 4. Add the three WooCommerce environment variables above.
 5. Deploy.
 
-Vercel supports zero-config Express backends, so this project uses `app.ts` as the backend entrypoint and exports the Express app directly.
+This folder uses an explicit Vercel function entrypoint at `api/index.ts` plus a rewrite in `vercel.json`, so every request is handled by the Express app in `app.ts`.
 
 ## Test after deploy
 
@@ -42,7 +42,7 @@ Replace the domain below with your real Vercel URL.
 - `https://your-project.vercel.app/config`
 - `https://your-project.vercel.app/catalog/categories`
 
-`/health/woo` is the fastest way to confirm that Vercel can actually reach your WooCommerce API.
+Check `/health` first. If that works, check `/health/woo` next. `/health/woo` is the fastest way to confirm that Vercel can actually reach your WooCommerce API.
 
 ## Point the mobile app to Vercel
 
