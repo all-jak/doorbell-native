@@ -1,6 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { doorbellTheme } from '@/constants/theme';
@@ -28,18 +27,16 @@ export function ProductCard({
     <Pressable
       onPress={onPress}
       style={({ pressed }) => [styles.card, mode === 'grid' && styles.gridCard, pressed && styles.cardPressed]}>
-      <LinearGradient colors={['#FFF4EE', '#FFE9DD']} style={styles.imageWrap}>
+      
+      <View style={styles.imageWrap}>
         {product.image ? <Image contentFit="cover" source={{ uri: product.image }} style={styles.image} /> : null}
-        {discount ? (
-          <View style={styles.discountBadge}>
-            <Text style={styles.discountText}>{discount}% off</Text>
-          </View>
-        ) : null}
+        
         {isUnavailable ? (
           <View style={styles.stockBadge}>
             <Text style={styles.stockText}>Unavailable</Text>
           </View>
         ) : null}
+
         <Pressable
           disabled={isUnavailable}
           onPress={(event) => {
@@ -52,27 +49,53 @@ export function ProductCard({
             pressed && styles.addButtonPressed,
           ]}>
           <MaterialCommunityIcons
-            color={doorbellTheme.colors.surface}
+            color={isUnavailable ? '#ccc' : doorbellTheme.colors.accent}
             name="plus"
             size={22}
           />
         </Pressable>
-      </LinearGradient>
+      </View>
+
       <View style={styles.copy}>
-        {categoryLabel ? <Text style={styles.categoryLabel}>{categoryLabel}</Text> : null}
-        <Text numberOfLines={2} style={styles.name}>
-          {product.name}
-        </Text>
-        {product.unitLabel ? <Text style={styles.unit}>{product.unitLabel}</Text> : null}
+        {discount ? (
+          <View style={styles.discountRow}>
+            <View style={styles.discountBadge}>
+               <Text style={styles.discountText}>{discount}% OFF</Text>
+            </View>
+          </View>
+        ) : (
+          <View style={{height: 22}} /> // placeholder to align items without discount
+        )}
+
         <View style={styles.priceRow}>
           <Text style={styles.price}>{formatCurrency(product.price, product.currency)}</Text>
           {product.regularPrice && product.regularPrice > product.price ? (
-            <Text style={styles.regularPrice}>{formatCurrency(product.regularPrice, product.currency)}</Text>
+             <Text style={styles.regularPrice}>{formatCurrency(product.regularPrice, product.currency)}</Text>
           ) : null}
         </View>
-        <Text numberOfLines={2} style={styles.description}>
-          {stripHtml(product.shortDescription) || 'DoorBell storefront pick'}
+
+        {categoryLabel ? (
+            <View style={styles.tagWrap}>
+              <Text style={styles.tagText}>{categoryLabel}</Text>
+            </View>
+        ) : null}
+
+        <Text numberOfLines={2} style={styles.name}>
+          {product.name}
         </Text>
+
+        <Text
+          ellipsizeMode="tail"
+          numberOfLines={mode === 'grid' ? 2 : 1}
+          style={styles.unit}>
+          {product.unitLabel || stripHtml(product.shortDescription || '1 pc')}
+        </Text>
+
+        <View style={styles.deliveryTimeRow}>
+           <MaterialCommunityIcons name="lightning-bolt" size={14} color={doorbellTheme.colors.accent} />
+           <Text style={styles.deliveryTimeText}>10 mins</Text>
+        </View>
+
       </View>
     </Pressable>
   );
@@ -80,113 +103,134 @@ export function ProductCard({
 
 const styles = StyleSheet.create({
   card: {
-    width: 214,
-    gap: 12,
+    width: 150,
+    gap: 8,
   },
   gridCard: {
     width: '100%',
-    flex: 1,
+    marginBottom: 16,
   },
   cardPressed: {
     opacity: 0.96,
   },
   imageWrap: {
-    aspectRatio: 0.94,
-    borderRadius: 28,
-    overflow: 'hidden',
-    justifyContent: 'flex-end',
-    borderWidth: 1,
-    borderColor: doorbellTheme.colors.border,
+    aspectRatio: 0.9,
+    borderRadius: 8,
+    overflow: 'visible',
+    backgroundColor: '#F7F7F7', // soft grey similar to bigbasket images
   },
   image: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  discountBadge: {
-    position: 'absolute',
-    top: 12,
-    left: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: '#FFE357',
-  },
-  discountText: {
-    color: doorbellTheme.colors.text,
-    fontFamily: doorbellTheme.fonts.bold,
-    fontSize: 11,
-    textTransform: 'uppercase',
-  },
-  stockBadge: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: 'rgba(33, 23, 20, 0.72)',
-  },
-  stockText: {
-    color: doorbellTheme.colors.surface,
-    fontFamily: doorbellTheme.fonts.medium,
-    fontSize: 11,
+    width: '100%',
+    height: '100%',
+    borderRadius: 8,
   },
   addButton: {
     position: 'absolute',
-    right: 14,
-    bottom: 14,
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: doorbellTheme.colors.accent,
+    right: -4,
+    bottom: -10,
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: '#FFF',
+    borderWidth: 1,
+    borderColor: doorbellTheme.colors.accent,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
   },
   addButtonDisabled: {
-    backgroundColor: doorbellTheme.colors.textMuted,
+    borderColor: '#ddd',
+    backgroundColor: '#f9f9f9',
   },
   addButtonPressed: {
-    transform: [{ scale: 0.96 }],
+    transform: [{ scale: 0.92 }],
+  },
+  stockBadge: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+  },
+  stockText: {
+    color: '#FFF',
+    fontFamily: doorbellTheme.fonts.medium,
+    fontSize: 10,
   },
   copy: {
+    marginTop: 10,
     gap: 4,
   },
-  categoryLabel: {
-    color: doorbellTheme.colors.accent,
-    fontFamily: doorbellTheme.fonts.medium,
-    fontSize: 12,
-    textTransform: 'uppercase',
+  discountRow: {
+    flexDirection: 'row',
   },
-  name: {
-    color: doorbellTheme.colors.text,
+  discountBadge: {
+    backgroundColor: '#FFE357',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 4,
+  },
+  discountText: {
+    color: '#000',
     fontFamily: doorbellTheme.fonts.bold,
-    fontSize: 16,
-    lineHeight: 22,
-  },
-  unit: {
-    color: doorbellTheme.colors.success,
-    fontFamily: doorbellTheme.fonts.medium,
-    fontSize: 14,
+    fontSize: 10,
   },
   priceRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    alignItems: 'baseline',
+    gap: 6,
   },
   price: {
     color: doorbellTheme.colors.text,
     fontFamily: doorbellTheme.fonts.bold,
-    fontSize: 20,
+    fontSize: 16,
   },
   regularPrice: {
-    color: doorbellTheme.colors.textMuted,
+    color: '#999',
     fontFamily: doorbellTheme.fonts.regular,
-    fontSize: 14,
+    fontSize: 12,
     textDecorationLine: 'line-through',
   },
-  description: {
-    color: doorbellTheme.colors.textMuted,
+  tagWrap: {
+    backgroundColor: doorbellTheme.colors.accentSoft,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    alignSelf: 'flex-start',
+  },
+  tagText: {
+    color: doorbellTheme.colors.accentStrong,
+    fontFamily: doorbellTheme.fonts.bold,
+    fontSize: 9,
+    textTransform: 'uppercase',
+  },
+  name: {
+    color: doorbellTheme.colors.text,
+    fontFamily: doorbellTheme.fonts.medium,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  unit: {
+    color: '#888',
     fontFamily: doorbellTheme.fonts.regular,
-    fontSize: 14,
-    lineHeight: 20,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  deliveryTimeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    marginTop: 2,
+  },
+  deliveryTimeText: {
+    color: doorbellTheme.colors.accent,
+    fontFamily: doorbellTheme.fonts.bold,
+    fontSize: 11,
   },
 });

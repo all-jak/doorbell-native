@@ -29,12 +29,12 @@ const baseConfig = {
     [
       "expo-splash-screen",
       {
-        image: "./assets/images/splash-icon.png",
+        image: "./assets/logo-normal.png",
         imageWidth: 200,
         resizeMode: "contain",
-        backgroundColor: "#ffffff",
+        backgroundColor: "#FFF7F2",
         dark: {
-          backgroundColor: "#000000",
+          backgroundColor: "#FFF7F2",
         },
       },
     ],
