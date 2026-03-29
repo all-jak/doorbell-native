@@ -7,6 +7,21 @@ import { SearchBar } from '@/components/storefront/search-bar';
 import { doorbellTheme } from '@/constants/theme';
 import { useResource } from '@/hooks/use-resource';
 import { api } from '@/lib/api';
+import type { CategoryItem } from '@/lib/types';
+
+const hasCategoryImage = (category: CategoryItem) => Boolean(category.image?.trim());
+
+const sortCategoriesWithImagesFirst = (categories: CategoryItem[]) =>
+  [...categories].sort((leftCategory, rightCategory) => {
+    const leftHasImage = hasCategoryImage(leftCategory);
+    const rightHasImage = hasCategoryImage(rightCategory);
+
+    if (leftHasImage === rightHasImage) {
+      return 0;
+    }
+
+    return leftHasImage ? -1 : 1;
+  });
 
 export default function CategoriesScreen() {
   const router = useRouter();
@@ -18,6 +33,7 @@ export default function CategoriesScreen() {
       return categories.filter((category) => category.parent === 0);
     },
   });
+  const categories = sortCategoriesWithImagesFirst(data ?? []);
 
   const numColumns = width >= 420 ? 3 : 2;
 
@@ -26,7 +42,7 @@ export default function CategoriesScreen() {
       <FlatList
         columnWrapperStyle={numColumns > 1 ? styles.columnWrap : undefined}
         contentContainerStyle={styles.content}
-        data={data ?? []}
+        data={categories}
         key={numColumns}
         keyExtractor={(item) => String(item.id)}
         ListEmptyComponent={

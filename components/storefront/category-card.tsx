@@ -1,6 +1,6 @@
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { doorbellTheme } from '@/constants/theme';
@@ -15,10 +15,19 @@ type CategoryCardProps = {
 
 export function CategoryCard({ category, onPress }: CategoryCardProps) {
   const fallbackArt = getCategoryArt(category.slug);
-  const sources = [category.image, fallbackArt.imageUrl].filter(Boolean) as string[];
+  const sources = Array.from(
+    new Set(
+      [...(category.imageSources ?? []), category.image, fallbackArt.imageUrl].filter(Boolean)
+    )
+  ) as string[];
   const [sourceIndex, setSourceIndex] = useState(0);
+  const sourceSignature = sources.join('|');
 
   const currentSource = sources[sourceIndex];
+
+  useEffect(() => {
+    setSourceIndex(0);
+  }, [category.id, sourceSignature]);
 
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}>

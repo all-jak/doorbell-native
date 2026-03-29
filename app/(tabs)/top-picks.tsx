@@ -1,4 +1,5 @@
-import { useEffect, useState, useTransition } from 'react';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { type ComponentProps, useEffect, useState, useTransition } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 
@@ -23,6 +24,74 @@ const buildTopPickCategories = (categories: CategoryItem[]) => {
   );
 
   return [...curated, ...fallbackCategories].slice(0, 12);
+};
+
+type RailIconName = ComponentProps<typeof MaterialCommunityIcons>['name'];
+
+const getCategoryRailIcon = ({ name, slug }: Pick<CategoryItem, 'name' | 'slug'>): RailIconName => {
+  const categoryKey = `${name} ${slug}`.toLowerCase().replace('&amp;', '&');
+
+  if (
+    categoryKey.includes('grocery') ||
+    categoryKey.includes('market') ||
+    categoryKey.includes('shop')
+  ) {
+    return 'basket-fill';
+  }
+
+  if (
+    categoryKey.includes('fruit') ||
+    categoryKey.includes('vegetable') ||
+    categoryKey.includes('produce')
+  ) {
+    return 'fruit-grapes-outline';
+  }
+
+  if (
+    categoryKey.includes('dairy') ||
+    categoryKey.includes('egg') ||
+    categoryKey.includes('milk')
+  ) {
+    return 'egg-outline';
+  }
+
+  if (categoryKey.includes('fish') || categoryKey.includes('seafood')) {
+    return 'fish';
+  }
+
+  if (
+    categoryKey.includes('baby') ||
+    categoryKey.includes('kids') ||
+    categoryKey.includes('diaper')
+  ) {
+    return 'baby-face-outline';
+  }
+
+  if (
+    categoryKey.includes('home') ||
+    categoryKey.includes('clean') ||
+    categoryKey.includes('household')
+  ) {
+    return 'spray-bottle';
+  }
+
+  if (categoryKey.includes('rice') || categoryKey.includes('grain')) {
+    return 'rice';
+  }
+
+  if (categoryKey.includes('oil') || categoryKey.includes('ghee')) {
+    return 'oil';
+  }
+
+  if (
+    categoryKey.includes('chips') ||
+    categoryKey.includes('snack') ||
+    categoryKey.includes('food')
+  ) {
+    return 'food-outline';
+  }
+
+  return 'storefront-outline';
 };
 
 export default function TopPicksScreen() {
@@ -62,7 +131,9 @@ export default function TopPicksScreen() {
 
   const renderRailItem = ({ item }: { item: CategoryItem }) => {
     const art = getCategoryArt(item.slug);
+    const iconName = getCategoryRailIcon(item);
     const selected = item.slug === activeCategorySlug;
+    const railIconColor = selected ? doorbellTheme.colors.accent : doorbellTheme.colors.text;
 
     return (
       <Pressable
@@ -74,10 +145,26 @@ export default function TopPicksScreen() {
           selected && styles.railItemSelected,
           pressed && styles.railItemPressed,
         ]}>
-        <View style={[styles.railSwatch, { backgroundColor: art.colors[1] }]} />
+        <View
+          style={[
+            styles.railSwatch,
+            {
+              backgroundColor: art.colors[0],
+            },
+          ]}>
+          <View style={[styles.railGlow, { backgroundColor: art.colors[1] }]} />
+          <MaterialCommunityIcons color={railIconColor} name={iconName} size={24} />
+        </View>
         <Text numberOfLines={2} style={[styles.railText, selected && styles.railTextSelected]}>
           {item.name.replace('&amp;', '&')}
         </Text>
+        <View style={[styles.railBadge, selected && styles.railBadgeSelected]}>
+          <Text
+            numberOfLines={2}
+            style={[styles.railBadgeText, selected && styles.railBadgeTextSelected]}>
+            {art.badge}
+          </Text>
+        </View>
       </Pressable>
     );
   };
@@ -207,7 +294,7 @@ const styles = StyleSheet.create({
   railItem: {
     padding: 12,
     borderRadius: 22,
-    gap: 8,
+    gap: 10,
     alignItems: 'center',
   },
   railItemSelected: {
@@ -218,8 +305,19 @@ const styles = StyleSheet.create({
   },
   railSwatch: {
     width: 58,
-    height: 46,
+    height: 52,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  railGlow: {
+    position: 'absolute',
+    width: 36,
+    height: 36,
     borderRadius: 18,
+    opacity: 0.75,
   },
   railText: {
     color: doorbellTheme.colors.textMuted,
@@ -230,6 +328,26 @@ const styles = StyleSheet.create({
   },
   railTextSelected: {
     color: doorbellTheme.colors.text,
+  },
+  railBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: doorbellTheme.colors.chip,
+    minWidth: 78,
+  },
+  railBadgeSelected: {
+    backgroundColor: doorbellTheme.colors.accentSoft,
+  },
+  railBadgeText: {
+    color: doorbellTheme.colors.textMuted,
+    fontFamily: doorbellTheme.fonts.medium,
+    fontSize: 10,
+    lineHeight: 13,
+    textAlign: 'center',
+  },
+  railBadgeTextSelected: {
+    color: doorbellTheme.colors.accentStrong,
   },
   railLoading: {
     flex: 1,

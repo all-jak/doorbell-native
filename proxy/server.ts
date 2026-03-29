@@ -184,6 +184,20 @@ const toPublicAssetUrl = (value: unknown, publicBaseUrl?: string) => {
     : remoteUrl;
 };
 
+const toPublicAssetSources = (value: unknown, publicBaseUrl?: string) => {
+  const remoteUrl = normalizeWooAssetUrl(value);
+
+  if (!remoteUrl) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      [toPublicAssetUrl(remoteUrl, publicBaseUrl), remoteUrl].filter(isPresent)
+    )
+  );
+};
+
 const isPresent = (value: string | null): value is string => Boolean(value);
 
 const buildWooUrl = (resourcePath: string, params: Record<string, string | number | boolean | undefined> = {}) => {
@@ -404,18 +418,23 @@ async function wooJson<T>(
   return JSON.parse(response.body) as T;
 }
 
-const normalizeCategory = (category: WooCategory, publicBaseUrl?: string) => ({
-  id: category.id,
-  name: category.name,
-  slug: category.slug,
-  count: category.count,
-  parent: category.parent,
-  description: category.description,
-  image: toPublicAssetUrl(
+const normalizeCategory = (category: WooCategory, publicBaseUrl?: string) => {
+  const imageSources = toPublicAssetSources(
     category.image && typeof category.image === 'object' ? (category.image.src ?? null) : null,
     publicBaseUrl
-  ),
-});
+  );
+
+  return {
+    id: category.id,
+    name: category.name,
+    slug: category.slug,
+    count: category.count,
+    parent: category.parent,
+    description: category.description,
+    image: imageSources[0] ?? null,
+    imageSources,
+  };
+};
 
 const normalizeProductCard = (product: WooProduct, publicBaseUrl?: string) => ({
   id: product.id,

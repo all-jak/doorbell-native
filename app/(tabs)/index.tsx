@@ -10,7 +10,7 @@ import { ProductCard } from '@/components/storefront/product-card';
 import { doorbellTheme } from '@/constants/theme';
 import { useResource } from '@/hooks/use-resource';
 import { api } from '@/lib/api';
-import type { HomeSection, ProductCard as ProductCardType } from '@/lib/types';
+import type { CategoryItem, HomeSection, ProductCard as ProductCardType } from '@/lib/types';
 import { useCart } from '@/providers/cart-provider';
 
 const BANGLADESH_CITIES = [
@@ -36,17 +36,22 @@ const CATEGORY_BANNERS = [
   require('@/assets/images/banners/banner-10.jpg'),
 ] as const;
 const CATEGORY_ICONS = [
-  require('@/assets/images/categories/cat_fruits.png'),
-  require('@/assets/images/categories/cat_dairy.png'),
-  require('@/assets/images/categories/cat_snacks.png'),
-  require('@/assets/images/categories/cat_meat.png'),
-  require('@/assets/images/categories/cat_drinks.png'),
-  require('@/assets/images/categories/cat_cleaning.png'),
+  require('@/assets/images/categories/cat_fruits.jpg'),
+  require('@/assets/images/categories/cat_dairy.jpg'),
+  require('@/assets/images/categories/cat_snacks.jpg'),
+  require('@/assets/images/categories/cat_meat.jpg'),
+  require('@/assets/images/categories/cat_drinks.jpg'),
+  require('@/assets/images/categories/cat_cleaning.jpg'),
 ] as const;
 const hasRealProductImage = (product: ProductCardType) =>
   typeof product.image === 'string' && product.image.trim().length > 0;
 const isEnglishCategoryName = (value: string) =>
   /^[A-Za-z0-9][A-Za-z0-9\s&(),.'/-]*$/.test(value.replaceAll('&amp;', '&').trim());
+const normalizeCategoryKey = (value: string) =>
+  value.replaceAll('&amp;', '&').toLowerCase().replace(/[^a-z0-9]+/g, '');
+const isPreOrderCategory = (category: Pick<CategoryItem, 'name' | 'slug'>) =>
+  normalizeCategoryKey(category.slug) === 'preorder' ||
+  normalizeCategoryKey(category.name) === 'preorder';
 const getBannerForCategory = (slug: string) =>
   CATEGORY_BANNERS[
     Array.from(slug).reduce((total, character) => total + character.charCodeAt(0), 17) %
@@ -293,12 +298,21 @@ export default function HomeScreen() {
     return rows;
   }, []);
   const categories = categoryResource.data ?? [];
+  const preOrderCategory = categories.find((category) => isPreOrderCategory(category));
+  const browseCategories = categories.filter((category) => !isPreOrderCategory(category));
   const homeCategories: (
     | { name: string; slug: string; icon: keyof typeof Ionicons.glyphMap; isAll: true }
     | { name: string; slug: string; banner: (typeof CATEGORY_BANNERS)[number]; thumb: (typeof CATEGORY_ICONS)[number]; isAll: false }
   )[] = [
     { name: 'All', slug: 'all', icon: 'basket-outline', isAll: true },
-    ...categories.map((category) => ({
+    {
+      name: preOrderCategory?.name.replaceAll('&amp;', '&') ?? 'Pre-Order',
+      slug: preOrderCategory?.slug ?? 'pre-order',
+      banner: getBannerForCategory(preOrderCategory?.slug ?? 'pre-order'),
+      thumb: getIconForCategory(preOrderCategory?.slug ?? 'pre-order'),
+      isAll: false as const,
+    },
+    ...browseCategories.map((category) => ({
       name: category.name.replaceAll('&amp;', '&'),
       slug: category.slug,
       banner: getBannerForCategory(category.slug),
@@ -309,13 +323,14 @@ export default function HomeScreen() {
   const selectedCategory =
     selectedCategorySlug === 'all'
       ? null
-      : categories.find((category) => category.slug === selectedCategorySlug) ?? null;
+      : homeCategories.find((category) => !category.isAll && category.slug === selectedCategorySlug) ??
+        null;
 
   useEffect(() => {
-    if (selectedCategorySlug !== 'all' && categories.length && !selectedCategory) {
+    if (selectedCategorySlug !== 'all' && homeCategories.length && !selectedCategory) {
       setSelectedCategorySlug('all');
     }
-  }, [categories.length, selectedCategory, selectedCategorySlug]);
+  }, [homeCategories.length, selectedCategory, selectedCategorySlug]);
 
   const loadMoreAllProducts = useCallback(() => {
     if (

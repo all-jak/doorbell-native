@@ -8,6 +8,7 @@ export type CategoryItem = {
   parent: number;
   description?: string;
   image?: string | null;
+  imageSources?: string[];
 };
 
 export type ProductCategory = {
