@@ -56,4 +56,6 @@ In the Expo app `.env`, set:
 EXPO_PUBLIC_API_BASE_URL=https://your-project.vercel.app
 ```
 
+For EAS staging/production builds, add the same `EXPO_PUBLIC_API_BASE_URL` value in `eas.json` or in the EAS project environment as well. Remote builds do not read your local gitignored `.env` file.
+
 Then restart Metro or rebuild the app so the new env value is picked up.
